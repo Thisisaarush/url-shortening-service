@@ -14,22 +14,17 @@ services:
       - mongo
       - redis
     volumes:
-      - .:/usr/src/app
-    command: npm start
+      - .:/app
+      - /app/node_modules
 
   mongo:
     image: mongo:latest
     container_name: mongo
     ports:
       - "27017:27017"
-    volumes:
-      - url-shortening-service:/data/db
 
   redis:
     image: redis:latest
     container_name: redis
     ports:
       - "6379:6379"
-
-volumes:
-  url-shortening-service:
