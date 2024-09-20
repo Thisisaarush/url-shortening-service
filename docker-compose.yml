@@ -1,0 +1,35 @@
+version: "3.8"
+services:
+  app:
+    build:
+      context: .
+      target: ${NODE_ENV}
+    container_name: url-shortener-backend
+    ports:
+      - "5000:5000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+    depends_on:
+      - mongo
+      - redis
+    volumes:
+      - .:/usr/src/app
+    command: npm start
+
+  mongo:
+    image: mongo:latest
+    container_name: mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - url-shortening-service:/data/db
+
+  redis:
+    image: redis:latest
+    container_name: redis
+    ports:
+      - "6379:6379"
+
+volumes:
+  url-shortening-service:
