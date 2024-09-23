@@ -1,5 +1,5 @@
 const redisClient = require("../utils/redis")
-const prismaClient = require("../utils/prisma")
+const URL = require("../models/url")
 
 // Create a new short URL
 const createShortURL = async (req, res) => {
@@ -7,19 +7,49 @@ const createShortURL = async (req, res) => {
   if (!url) return res.status(400).json({ error: "URL is required" })
 
   try {
+    // Check if the URL already exists in the database
+    const existingURL = await URL.findOne({ url })
+    if (existingURL) {
+      const shortenedURL = `${req.protocol}://${req.get("host")}/${
+        existingURL.shortCode
+      }`
+      const response = {
+        originalURL: existingURL.url,
+        shortenedURL: shortenedURL,
+        accessCount: existingURL.accessCount,
+        createdAt: existingURL.createdAt,
+        shortCode: existingURL.shortCode,
+      }
+      return res.status(200).json(response)
+    }
+
     const { nanoid } = await import("nanoid")
     const shortCode = nanoid(6)
-    console.log("shortCode ⭐️", shortCode)
 
-    const newURL = await prismaClient.url.create({
-      data: { url, shortCode },
+    const newURL = new URL({
+      url,
+      shortCode,
     })
+
+    await newURL.save()
 
     // Cache the URL in Redis
     await redisClient.set(shortCode, JSON.stringify(newURL), "EX", 3600) // Expiry in 1 hour
 
-    return res.status(201).json(newURL)
+    // Construct the shortened URL
+    const shortenedURL = `${req.protocol}://${req.get("host")}/${shortCode}`
+
+    const response = {
+      originalURL: newURL.url,
+      shortenedURL: shortenedURL,
+      accessCount: newURL.accessCount,
+      createdAt: newURL.createdAt,
+      shortCode: newURL.shortCode,
+    }
+
+    return res.status(201).json(response)
   } catch (error) {
+    console.error("Error creating short URL:", error)
     res.status(500).json({ error: "Error creating short URL" })
   }
 }
@@ -29,30 +59,35 @@ const getOriginalURL = async (req, res) => {
   const { shortCode } = req.params
 
   try {
-    // fetching from cache first
+    // Fetching from cache first
     const cachedURL = await redisClient.get(shortCode)
     if (cachedURL) {
       return res.status(200).json(JSON.parse(cachedURL))
     }
 
     // Fetch from database if not in cache
-    const urlRecord = await prismaClient.url.findUnique({
-      where: { shortCode },
-    })
+    const urlRecord = await URL.findOne({ shortCode })
     if (!urlRecord) {
       return res.status(404).json({ error: "URL not found" })
     }
 
     // Update access count
-    await prismaClient.url.update({
-      where: { shortCode },
-      data: { accessCount: { increment: 1 } },
-    })
+    urlRecord.accessCount += 1
+    await urlRecord.save()
 
-    // Cache the URL
+    // Cache the updated URL
     await redisClient.set(shortCode, JSON.stringify(urlRecord), "EX", 3600) // Expiry in 1 hour
 
-    res.status(200).json(urlRecord)
+    const response = {
+      id: urlRecord._id,
+      originalURL: urlRecord.url,
+      shortCode: urlRecord.shortCode,
+      accessCount: urlRecord.accessCount,
+      createdAt: urlRecord.createdAt,
+      updatedAt: urlRecord.updatedAt,
+    }
+
+    res.status(200).json(response)
   } catch (error) {
     res.status(500).json({ error: "Error retrieving original URL" })
   }
@@ -64,17 +99,22 @@ const updateURL = async (req, res) => {
   const { url } = req.body
 
   try {
-    const updatedURL = await prismaClient.url.update({
-      where: { shortCode },
-      data: { url },
-    })
+    const updatedURL = await URL.findOneAndUpdate(
+      { shortCode },
+      { url },
+      { new: true }
+    )
+
+    if (!updatedURL) {
+      return res.status(404).json({ error: "URL not found" })
+    }
 
     // Invalidate the cache
     await redisClient.del(shortCode)
 
     res.status(200).json(updatedURL)
   } catch (error) {
-    res.status(404).json({ error: "URL not found" })
+    res.status(500).json({ error: "Error updating URL" })
   }
 }
 
@@ -83,14 +123,18 @@ const deleteURL = async (req, res) => {
   const { shortCode } = req.params
 
   try {
-    await prismaClient.url.delete({ where: { shortCode } })
+    const deletedURL = await URL.findOneAndDelete({ shortCode })
+
+    if (!deletedURL) {
+      return res.status(404).json({ error: "URL not found" })
+    }
 
     // Remove from cache
     await redisClient.del(shortCode)
 
     res.status(204).send() // No content to send back in response
   } catch (error) {
-    res.status(404).json({ error: "URL not found" })
+    res.status(500).json({ error: "Error deleting URL" })
   }
 }
 
@@ -99,9 +143,7 @@ const getURLStats = async (req, res) => {
   const { shortCode } = req.params
 
   try {
-    const urlRecord = await prismaClient.url.findUnique({
-      where: { shortCode },
-    })
+    const urlRecord = await URL.findOne({ shortCode })
     if (!urlRecord) {
       return res.status(404).json({ error: "URL not found" })
     }
