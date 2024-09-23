@@ -15,6 +15,6 @@ app.use(logger)
 app.use(rateLimiter)
 
 // Routes
-app.use("/api", urlRoutes)
+app.use("/", urlRoutes)
 
 module.exports = app

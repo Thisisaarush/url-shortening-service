@@ -1,5 +1,6 @@
 const redisClient = require("../utils/redis")
 const URL = require("../models/url")
+const { get } = require("mongoose")
 
 // Create a new short URL
 const createShortURL = async (req, res) => {
@@ -153,6 +154,51 @@ const getURLStats = async (req, res) => {
     res.status(500).json({ error: "Error retrieving URL statistics" })
   }
 }
+// Get original URL and redirect
+const getOriginalURLAndRedirect = async (req, res) => {
+  const { shortCode } = req.params
+
+  try {
+    const cachedURL = await redisClient.get(shortCode)
+    if (cachedURL) {
+      const urlRecord = JSON.parse(cachedURL)
+      await URL.updateOne({ _id: urlRecord._id }, { $inc: { accessCount: 1 } })
+      // Ensure the URL has a protocol
+      const redirectURL =
+        urlRecord.url.startsWith("http://") ||
+        urlRecord.url.startsWith("https://")
+          ? urlRecord.url
+          : `http://${urlRecord.url}`
+      // Redirect to the original URL
+      return res.redirect(redirectURL)
+    }
+
+    // Fetch from database if not in cache
+    const urlRecord = await URL.findOne({ shortCode })
+    if (!urlRecord) {
+      return res.status(404).json({ error: "URL not found" })
+    }
+
+    // Update access count
+    await URL.updateOne({ _id: urlRecord._id }, { $inc: { accessCount: 1 } })
+
+    // Cache the URL
+    await redisClient.set(shortCode, JSON.stringify(urlRecord), "EX", 3600) // Expiry in 1 hour
+
+    // Ensure the URL has a protocol
+    const redirectURL =
+      urlRecord.url.startsWith("http://") ||
+      urlRecord.url.startsWith("https://")
+        ? urlRecord.url
+        : `http://${urlRecord.url}`
+
+    // Redirect to the original URL
+    return res.redirect(redirectURL)
+  } catch (error) {
+    console.error("Error retrieving original URL:", error)
+    res.status(500).json({ error: "Error retrieving original URL" })
+  }
+}
 
 module.exports = {
   createShortURL,
@@ -160,4 +206,5 @@ module.exports = {
   updateURL,
   deleteURL,
   getURLStats,
+  getOriginalURLAndRedirect,
 }
